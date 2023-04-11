@@ -114,9 +114,10 @@ Notes:
   import or export, respectively, in the same scope (component, component type
   or instance type).
 * Validation of `[constructor]` names requires that the `func` returns a
-  `(result (own $R))`, where `$R` is the resource labeled `r`.
+  `(result (unique $R))`, where `$R` is the resource labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
-  to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
+  to be `(param "self" (use call <scope> $R))`, where `$R` is the resource
+  labeled `r`.
 * Validation of `[method]` and `[static]` names ensures that all field names
   are disjoint.
 
@@ -203,14 +204,20 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6c t*:vec(<valtype>)                  => (union t*)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
-                | 0x69 i:<typeidx>                        => (own i)
-                | 0x68 i:<typeidx>                        => (borrow i)
+                | 0x69 h:<ownexcl> s:<scope> i:<typeidx>  => (h s? i)
 labelvaltype  ::= l:<label> t:<valtype>                   => l t
 case          ::= l:<label> t?:<valtype>? r?:<u32>?       => (case l t? (refines case-label[r])?)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
+ownexcl       ::= 0x0                                     => use
+                | 0x1                                     => rc
+                | 0x2                                     => borrow
+                | 0x3                                     => unique
+scope         ::= 0x0                                     =>
+                | 0x1                                     => call
+                | 0x2 l:<label>                           => (parent l)
 resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32) (dtor f)?)
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
@@ -240,12 +247,12 @@ Notes:
   with type opcodes starting at SLEB128(-1) (`0x7f`) and going down,
   reserving the nonnegative SLEB128s for type indices.
 * Validation of `valtype` requires the `typeidx` to refer to a `defvaltype`.
-* Validation of `own` and `borrow` requires the `typeidx` to refer to a
-  resource type.
-* Validation only allows `borrow` to be used inside the `param` of a `functype`.
-  (This is likely to change in a future PR, converting `functype` into a
-  compound type constructor analogous to `moduletype` and `componenttype` and
-  using scoping to enforce this constraint instead.)
+* Validation of `handle` types require the `typeidx` to refer to a resource
+  type.
+* In a function type, the `call` scope may only be used inside a `param` type
+  and `parent`-scoped handles to only be used inside a `result` type, resp.
+  Lastly, the `parent` label is validated to match a `param` with non-owning
+  `call`-scoped non-owning handle type.
 * Validation of `resourcetype` requires the destructor (if present) to have
   type `[i32] -> []`.
 * Validation of `instancedecl` (currently) only allows the `type` and
@@ -280,9 +287,9 @@ Notes:
 ```
 canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
-           | 0x02 t:<typeidx>                                    => (canon resource.new t (core func))
-           | 0x03 t:<valtype>                                    => (canon resource.drop t (core func))
-           | 0x04 t:<typeidx>                                    => (canon resource.rep t (core func))
+           | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
+           | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
+           | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -290,6 +297,7 @@ canonopt ::= 0x00                                                => string-encod
            | 0x03 m:<core:memidx>                                => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
+           | 0x06                                                => dedupe
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
